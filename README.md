@@ -1,7 +1,7 @@
-SB3 to SB2 Converter
+SB3 to SB2 Converter (Python 3.13+)
 ==============
-
 A simple Python 3 program that converts .sb3 files to .sb2 files
+This is fork that makes it work on Python 3.13 onwards by reimplementing some functions of audioop.
 
 Requirements
 --------------
