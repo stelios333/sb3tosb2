@@ -1,10 +1,15 @@
-import audioop
+try:
+    import audioop
+except ImportError:
+    audioop = None
+
 import hashlib
 import io
 import json
 import sys
 import wave
 import zipfile
+import struct
 
 sys.setrecursionlimit(4100)
 
@@ -28,6 +33,88 @@ def printError(message, gui):
 def rightPad(s, l, c):
     assert type(s) == str and type(c) == str
     return s + (l * c)
+
+# Audioop got deprecated and removed in Python 3.13 so we have to reimplement some of its functions
+
+
+def convert_to_mono(stereo_data, sample_width):
+    """
+    Convert stereo audio data to mono by averaging left and right channels.
+
+    :param stereo_data: Raw audio data bytes
+    :param sample_width: Bytes per sample (typically 2 for 16-bit audio)
+    :return: Mono audio data bytes
+    """
+    # Determine the format string based on sample width
+    if sample_width == 1:  # 8-bit audio
+        fmt = f"{len(stereo_data)}B"
+    elif sample_width == 2:  # 16-bit audio
+        fmt = f"{len(stereo_data) // 2}h"
+    elif sample_width == 4:  # 32-bit audio
+        fmt = f"{len(stereo_data) // 4}i"
+    else:
+        raise ValueError("Unsupported sample width")
+
+    # Unpack stereo data into left and right channels
+    unpacked = struct.unpack(fmt, stereo_data)
+    # Average left and right channels
+    mono_data = [(left + right) // 2 for left,
+                 right in zip(unpacked[::2], unpacked[1::2])]
+
+    # Pack mono data back to bytes
+    return struct.pack(f'{len(mono_data)}{fmt[-1]}', *mono_data)
+
+
+def resample_audio(samp_data, width, original_rate, target_rate):
+    """
+    Resample audio data from input_rate to output_rate.
+
+    :param samp_data: Raw audio data bytes
+    :param width: Bytes per sample (1, 2, or 4)
+    :param original_rate: Original sample rate
+    :param target_rate: Desired sample rate
+    :return: Resampled audio data bytes
+    """
+    # Calculate the resampling ratio
+    ratio = target_rate / original_rate
+    if width == 1:
+        fmt = "B"
+    elif width == 2:
+        fmt = "h"
+    elif width == 4:
+        fmt = "i"
+    else:
+        raise ValueError("Unsupported sample width")
+
+    # Unpack the original samples
+    num_samples = len(samp_data) // width
+    original_samples = struct.unpack(f"{num_samples}{fmt}", samp_data)
+
+    # Compute the number of samples in the resampled data
+    resampled_length = int(len(original_samples) * ratio)
+    resampled_samples = []
+
+    for i in range(resampled_length):
+        # Map the new sample index to the original sample index
+        original_index = i / ratio
+        # Get the integer parts for interpolation
+        index_int = int(original_index)
+        frac = original_index - index_int
+
+        if index_int + 1 < len(original_samples):
+            # Linear interpolation between samples
+            left = original_samples[index_int]
+            right = original_samples[index_int + 1]
+            new_sample = int(left + (right - left) * frac)
+        else:
+            # Use the last sample if out of bounds
+            new_sample = original_samples[index_int]
+
+        resampled_samples.append(new_sample)
+
+    # Pack the resampled data back to binary format
+    resampled_fmt = f"{len(resampled_samples)}{fmt}"
+    return struct.pack(resampled_fmt, *resampled_samples)
 
 
 class BlockArgMapper:
@@ -71,27 +158,33 @@ class BlockArgMapper:
         return output
 
     def motion_turnright(self, block, blocks):
-        output = ['turnRight:', self.converter.inputVal('DEGREES', block, blocks)]
+        output = ['turnRight:', self.converter.inputVal(
+            'DEGREES', block, blocks)]
         return output
 
     def motion_turnleft(self, block, blocks):
-        output = ['turnLeft:', self.converter.inputVal('DEGREES', block, blocks)]
+        output = ['turnLeft:', self.converter.inputVal(
+            'DEGREES', block, blocks)]
         return output
 
     def motion_pointindirection(self, block, blocks):
-        output = ['heading:', self.converter.inputVal('DIRECTION', block, blocks)]
+        output = ['heading:', self.converter.inputVal(
+            'DIRECTION', block, blocks)]
         return output
 
     def motion_pointtowards(self, block, blocks):
-        output = ['pointTowards:', self.converter.inputVal('TOWARDS', block, blocks)]
+        output = ['pointTowards:', self.converter.inputVal(
+            'TOWARDS', block, blocks)]
         return output
 
     def motion_gotoxy(self, block, blocks):
-        output = ['gotoX:y:', self.converter.inputVal('X', block, blocks), self.converter.inputVal('Y', block, blocks)]
+        output = ['gotoX:y:', self.converter.inputVal(
+            'X', block, blocks), self.converter.inputVal('Y', block, blocks)]
         return output
 
     def motion_goto(self, block, blocks):
-        output = ['gotoSpriteOrMouse:', self.converter.inputVal('TO', block, blocks)]
+        output = ['gotoSpriteOrMouse:',
+                  self.converter.inputVal('TO', block, blocks)]
         return output
 
     def motion_glidesecstoxy(self, block, blocks):
@@ -100,7 +193,8 @@ class BlockArgMapper:
         return output
 
     def motion_changexby(self, block, blocks):
-        output = ['changeXposBy:', self.converter.inputVal('DX', block, blocks)]
+        output = ['changeXposBy:',
+                  self.converter.inputVal('DX', block, blocks)]
         return output
 
     def motion_setx(self, block, blocks):
@@ -108,7 +202,8 @@ class BlockArgMapper:
         return output
 
     def motion_changeyby(self, block, blocks):
-        output = ['changeYposBy:', self.converter.inputVal('DY', block, blocks)]
+        output = ['changeYposBy:',
+                  self.converter.inputVal('DY', block, blocks)]
         return output
 
     def motion_sety(self, block, blocks):
@@ -132,11 +227,13 @@ class BlockArgMapper:
         return ['heading']
 
     def motion_scroll_right(self, block, blocks):
-        output = ['scrollRight', self.converter.inputVal('DISTANCE', block, blocks)]
+        output = ['scrollRight', self.converter.inputVal(
+            'DISTANCE', block, blocks)]
         return output
 
     def motion_scroll_up(self, block, blocks):
-        output = ['scrollUp', self.converter.inputVal('DISTANCE', block, blocks)]
+        output = ['scrollUp', self.converter.inputVal(
+            'DISTANCE', block, blocks)]
         return output
 
     def motion_align_scene(self, block, blocks):
@@ -179,14 +276,16 @@ class BlockArgMapper:
         return ['hideAll']
 
     def looks_switchcostumeto(self, block, blocks):
-        output = ['lookLike:', self.converter.inputVal('COSTUME', block, blocks)]
+        output = ['lookLike:', self.converter.inputVal(
+            'COSTUME', block, blocks)]
         return output
 
     def looks_nextcostume(self, block, blocks):
         return ['nextCostume']
 
     def looks_switchbackdropto(self, block, blocks):
-        output = ['startScene', self.converter.inputVal('BACKDROP', block, blocks)]
+        output = ['startScene', self.converter.inputVal(
+            'BACKDROP', block, blocks)]
         return output
 
     def looks_nextbackdrop(self, block, blocks):
@@ -214,7 +313,8 @@ class BlockArgMapper:
         return ['filterReset']
 
     def looks_changesizeby(self, block, blocks):
-        output = ['changeSizeBy:', self.converter.inputVal('CHANGE', block, blocks)]
+        output = ['changeSizeBy:', self.converter.inputVal(
+            'CHANGE', block, blocks)]
         return output
 
     def looks_setsizeto(self, block, blocks):
@@ -222,11 +322,13 @@ class BlockArgMapper:
         return output
 
     def looks_changestretchby(self, block, blocks):
-        output = ['changeStretchBy:', self.converter.inputVal('CHANGE', block, blocks)]
+        output = ['changeStretchBy:',
+                  self.converter.inputVal('CHANGE', block, blocks)]
         return output
 
     def looks_setstretchto(self, block, blocks):
-        output = ['setStretchTo:', self.converter.inputVal('STRETCH', block, blocks)]
+        output = ['setStretchTo:', self.converter.inputVal(
+            'STRETCH', block, blocks)]
         return output
 
     def looks_gotofrontback(self, block, blocks):
@@ -261,7 +363,8 @@ class BlockArgMapper:
                     self.converter.costumeName = True
                     return ['getLine:ofList:', ['costumeIndex'], self.converter.compatVarName('costume names')]
                 else:
-                    self.converter.generateWarning("Incompatible block 'costume [name v]'")
+                    self.converter.generateWarning(
+                        "Incompatible block 'costume [name v]'")
                     self.converter.compatWarning = True
                     return ['costumeName']
 
@@ -276,28 +379,33 @@ class BlockArgMapper:
         return ['scale']
 
     def looks_switchbackdroptoandwait(self, block, blocks):
-        output = ['startSceneAndWait', self.converter.inputVal('BACKDROP', block, blocks)]
+        output = ['startSceneAndWait', self.converter.inputVal(
+            'BACKDROP', block, blocks)]
         return output
 
     # Sound
 
     def sound_play(self, block, blocks):
-        output = ['playSound:', self.converter.inputVal('SOUND_MENU', block, blocks)]
+        output = ['playSound:', self.converter.inputVal(
+            'SOUND_MENU', block, blocks)]
         return output
 
     def sound_playuntildone(self, block, blocks):
-        output = ['doPlaySoundAndWait', self.converter.inputVal('SOUND_MENU', block, blocks)]
+        output = ['doPlaySoundAndWait', self.converter.inputVal(
+            'SOUND_MENU', block, blocks)]
         return output
 
     def sound_stopallsounds(self, block, blocks):
         return ['stopAllSounds']
 
     def sound_changevolumeby(self, block, blocks):
-        output = ['changeVolumeBy:', self.converter.inputVal('VOLUME', block, blocks)]
+        output = ['changeVolumeBy:', self.converter.inputVal(
+            'VOLUME', block, blocks)]
         return output
 
     def sound_setvolumeto(self, block, blocks):
-        output = ['setVolumeTo:', self.converter.inputVal('VOLUME', block, blocks)]
+        output = ['setVolumeTo:', self.converter.inputVal(
+            'VOLUME', block, blocks)]
         return output
 
     def sound_volume(self, block, blocks):
@@ -316,7 +424,8 @@ class BlockArgMapper:
         return output
 
     def music_restForBeats(self, block, blocks):
-        output = ['rest:elapsed:from:', self.converter.inputVal('BEATS', block, blocks)]
+        output = ['rest:elapsed:from:',
+                  self.converter.inputVal('BEATS', block, blocks)]
         return output
 
     def music_playNoteForBeats(self, block, blocks):
@@ -325,19 +434,23 @@ class BlockArgMapper:
         return output
 
     def music_setInstrument(self, block, blocks):
-        output = ['instrument:', self.converter.inputVal('INSTRUMENT', block, blocks)]
+        output = ['instrument:', self.converter.inputVal(
+            'INSTRUMENT', block, blocks)]
         return output
 
     def music_midiSetInstrument(self, block, blocks):
-        output = ['midiInstrument:', self.converter.inputVal('INSTRUMENT', block, blocks)]
+        output = ['midiInstrument:', self.converter.inputVal(
+            'INSTRUMENT', block, blocks)]
         return output
 
     def music_changeTempo(self, block, blocks):
-        output = ['changeTempoBy:', self.converter.inputVal('TEMPO', block, blocks)]
+        output = ['changeTempoBy:', self.converter.inputVal(
+            'TEMPO', block, blocks)]
         return output
 
     def music_setTempo(self, block, blocks):
-        output = ['setTempoTo:', self.converter.inputVal('TEMPO', block, blocks)]
+        output = ['setTempoTo:', self.converter.inputVal(
+            'TEMPO', block, blocks)]
         return output
 
     def music_getTempo(self, block, blocks):
@@ -447,7 +560,8 @@ class BlockArgMapper:
                     paramStr = '[blocks...]'
                 else:
                     paramStr = param
-                self.converter.generateWarning(f"Incompatible block 'change pen [{paramStr} v] by ({value})'")
+                self.converter.generateWarning(
+                    f"Incompatible block 'change pen [{paramStr} v] by ({value})'")
                 return ['pen_changeColorParamBy', value, param]
 
     def pen_setPenColorParamTo(self, block, blocks):
@@ -487,11 +601,13 @@ class BlockArgMapper:
                     paramStr = '[blocks...]'
                 else:
                     paramStr = param
-                self.converter.generateWarning(f"Incompatible block 'set pen [{paramStr} v] to ({value})'")
+                self.converter.generateWarning(
+                    f"Incompatible block 'set pen [{paramStr} v] to ({value})'")
                 return ['pen_setPenColorParamTo', value, param]
 
     def pen_changePenSizeBy(self, block, blocks):
-        output = ['changePenSizeBy:', self.converter.inputVal('SIZE', block, blocks)]
+        output = ['changePenSizeBy:',
+                  self.converter.inputVal('SIZE', block, blocks)]
         return output
 
     def pen_setPenSizeTo(self, block, blocks):
@@ -504,7 +620,8 @@ class BlockArgMapper:
         return ['whenGreenFlag']
 
     def event_whenkeypressed(self, block, blocks):
-        output = ['whenKeyPressed', self.converter.fieldVal('KEY_OPTION', block)]
+        output = ['whenKeyPressed',
+                  self.converter.fieldVal('KEY_OPTION', block)]
         return output
 
     def event_whenthisspriteclicked(self, block, blocks):
@@ -514,7 +631,8 @@ class BlockArgMapper:
         return ['whenClicked']
 
     def event_whenbackdropswitchesto(self, block, blocks):
-        output = ['whenSceneStarts', self.converter.fieldVal('BACKDROP', block)]
+        output = ['whenSceneStarts',
+                  self.converter.fieldVal('BACKDROP', block)]
         return output
 
     def event_whengreaterthan(self, block, blocks):
@@ -527,21 +645,25 @@ class BlockArgMapper:
         return output
 
     def event_whenbroadcastreceived(self, block, blocks):
-        output = ['whenIReceive', self.converter.fieldVal('BROADCAST_OPTION', block)]
+        output = ['whenIReceive', self.converter.fieldVal(
+            'BROADCAST_OPTION', block)]
         return output
 
     def event_broadcast(self, block, blocks):
-        output = ['broadcast:', self.converter.inputVal('BROADCAST_INPUT', block, blocks)]
+        output = ['broadcast:', self.converter.inputVal(
+            'BROADCAST_INPUT', block, blocks)]
         return output
 
     def event_broadcastandwait(self, block, blocks):
-        output = ['doBroadcastAndWait', self.converter.inputVal('BROADCAST_INPUT', block, blocks)]
+        output = ['doBroadcastAndWait', self.converter.inputVal(
+            'BROADCAST_INPUT', block, blocks)]
         return output
 
     # Control
 
     def control_wait(self, block, blocks):
-        output = ['wait:elapsed:from:', self.converter.inputVal('DURATION', block, blocks)]
+        output = ['wait:elapsed:from:',
+                  self.converter.inputVal('DURATION', block, blocks)]
         return output
 
     def control_repeat(self, block, blocks):
@@ -550,7 +672,8 @@ class BlockArgMapper:
         return output
 
     def control_forever(self, block, blocks):
-        output = ['doForever', self.converter.substackVal('SUBSTACK', block, blocks)]
+        output = ['doForever', self.converter.substackVal(
+            'SUBSTACK', block, blocks)]
         return output
 
     def control_if(self, block, blocks):
@@ -565,7 +688,8 @@ class BlockArgMapper:
         return output
 
     def control_wait_until(self, block, blocks):
-        output = ['doWaitUntil', self.converter.inputVal('CONDITION', block, blocks)]
+        output = ['doWaitUntil', self.converter.inputVal(
+            'CONDITION', block, blocks)]
         return output
 
     def control_repeat_until(self, block, blocks):
@@ -592,7 +716,8 @@ class BlockArgMapper:
         return ['whenCloned']
 
     def control_create_clone_of(self, block, blocks):
-        output = ['createCloneOf', self.converter.inputVal('CLONE_OPTION', block, blocks)]
+        output = ['createCloneOf', self.converter.inputVal(
+            'CLONE_OPTION', block, blocks)]
         return output
 
     def control_delete_this_clone(self, block, blocks):
@@ -608,7 +733,8 @@ class BlockArgMapper:
         return ['CLR_COUNT']
 
     def control_all_at_once(self, block, blocks):
-        output = ['warpSpeed', self.converter.substackVal('SUBSTACK', block, blocks)]
+        output = ['warpSpeed', self.converter.substackVal(
+            'SUBSTACK', block, blocks)]
         return output
 
     # Video Sensing
@@ -619,25 +745,30 @@ class BlockArgMapper:
         return output
 
     def videoSensing_whenMotionGreaterThan(self, block, blocks):
-        output = ['whenSensorGreaterThan', 'video motion', self.converter.inputVal('REFERENCE', block, blocks)]
+        output = ['whenSensorGreaterThan', 'video motion',
+                  self.converter.inputVal('REFERENCE', block, blocks)]
         return output
 
     def videoSensing_videoToggle(self, block, blocks):
-        output = ['setVideoState', self.converter.inputVal('VIDEO_STATE', block, blocks)]
+        output = ['setVideoState', self.converter.inputVal(
+            'VIDEO_STATE', block, blocks)]
         return output
 
     def videoSensing_setVideoTransparency(self, block, blocks):
-        output = ['setVideoTransparency', self.converter.inputVal('TRANSPARENCY', block, blocks)]
+        output = ['setVideoTransparency', self.converter.inputVal(
+            'TRANSPARENCY', block, blocks)]
         return output
 
     # Sensing
 
     def sensing_touchingobject(self, block, blocks):
-        output = ['touching:', self.converter.inputVal('TOUCHINGOBJECTMENU', block, blocks)]
+        output = ['touching:', self.converter.inputVal(
+            'TOUCHINGOBJECTMENU', block, blocks)]
         return output
 
     def sensing_touchingcolor(self, block, blocks):
-        output = ['touchingColor:', self.converter.inputVal('COLOR', block, blocks)]
+        output = ['touchingColor:', self.converter.inputVal(
+            'COLOR', block, blocks)]
         return output
 
     def sensing_coloristouchingcolor(self, block, blocks):
@@ -646,7 +777,8 @@ class BlockArgMapper:
         return output
 
     def sensing_distanceto(self, block, blocks):
-        output = ['distanceTo:', self.converter.inputVal('DISTANCETOMENU', block, blocks)]
+        output = ['distanceTo:', self.converter.inputVal(
+            'DISTANCETOMENU', block, blocks)]
         return output
 
     def sensing_askandwait(self, block, blocks):
@@ -657,7 +789,8 @@ class BlockArgMapper:
         return ['answer']
 
     def sensing_keypressed(self, block, blocks):
-        output = ['keyPressed:', self.converter.inputVal('KEY_OPTION', block, blocks)]
+        output = ['keyPressed:', self.converter.inputVal(
+            'KEY_OPTION', block, blocks)]
         return output
 
     def sensing_mousedown(self, block, blocks):
@@ -727,19 +860,23 @@ class BlockArgMapper:
     # Operators
 
     def operator_add(self, block, blocks):
-        output = ['+', self.converter.inputVal('NUM1', block, blocks), self.converter.inputVal('NUM2', block, blocks)]
+        output = ['+', self.converter.inputVal(
+            'NUM1', block, blocks), self.converter.inputVal('NUM2', block, blocks)]
         return output
 
     def operator_subtract(self, block, blocks):
-        output = ['-', self.converter.inputVal('NUM1', block, blocks), self.converter.inputVal('NUM2', block, blocks)]
+        output = ['-', self.converter.inputVal(
+            'NUM1', block, blocks), self.converter.inputVal('NUM2', block, blocks)]
         return output
 
     def operator_multiply(self, block, blocks):
-        output = ['*', self.converter.inputVal('NUM1', block, blocks), self.converter.inputVal('NUM2', block, blocks)]
+        output = ['*', self.converter.inputVal(
+            'NUM1', block, blocks), self.converter.inputVal('NUM2', block, blocks)]
         return output
 
     def operator_divide(self, block, blocks):
-        output = ['/', self.converter.inputVal('NUM1', block, blocks), self.converter.inputVal('NUM2', block, blocks)]
+        output = ['/', self.converter.inputVal(
+            'NUM1', block, blocks), self.converter.inputVal('NUM2', block, blocks)]
         return output
 
     def operator_random(self, block, blocks):
@@ -795,7 +932,8 @@ class BlockArgMapper:
         return output
 
     def operator_length(self, block, blocks):
-        output = ['stringLength:', self.converter.inputVal('STRING', block, blocks)]
+        output = ['stringLength:', self.converter.inputVal(
+            'STRING', block, blocks)]
         return output
 
     def operator_contains(self, block, blocks):
@@ -808,7 +946,8 @@ class BlockArgMapper:
                 self.converter.compatVarName('results')]
 
     def operator_mod(self, block, blocks):
-        output = ['%', self.converter.inputVal('NUM1', block, blocks), self.converter.inputVal('NUM2', block, blocks)]
+        output = ['%', self.converter.inputVal(
+            'NUM1', block, blocks), self.converter.inputVal('NUM2', block, blocks)]
         return output
 
     def operator_round(self, block, blocks):
@@ -864,7 +1003,8 @@ class BlockArgMapper:
         return output
 
     def data_deletealloflist(self, block, blocks):
-        output = ['deleteLine:ofList:', 'all', self.converter.fieldVal('LIST', block)]
+        output = ['deleteLine:ofList:', 'all',
+                  self.converter.fieldVal('LIST', block)]
         return output
 
     def data_insertatlist(self, block, blocks):
@@ -950,11 +1090,13 @@ class BlockArgMapper:
         return output
 
     def wedo2_motorOn(self, block, blocks):
-        output = ['LEGO WeDo 2.0\u001fmotorOn', self.converter.inputVal('MOTOR_ID', block, blocks)]
+        output = ['LEGO WeDo 2.0\u001fmotorOn',
+                  self.converter.inputVal('MOTOR_ID', block, blocks)]
         return output
 
     def wedo2_motorOff(self, block, blocks):
-        output = ['LEGO WeDo 2.0\u001fmotorOff', self.converter.inputVal('MOTOR_ID', block, blocks)]
+        output = ['LEGO WeDo 2.0\u001fmotorOff',
+                  self.converter.inputVal('MOTOR_ID', block, blocks)]
         return output
 
     def wedo2_startMotorPower(self, block, blocks):
@@ -968,7 +1110,8 @@ class BlockArgMapper:
         return output
 
     def wedo2_setLightHue(self, block, blocks):
-        output = ['LEGO WeDo 2.0\u001fsetLED', self.converter.inputVal('HUE', block, blocks)]
+        output = ['LEGO WeDo 2.0\u001fsetLED',
+                  self.converter.inputVal('HUE', block, blocks)]
         return output
 
     def wedo2_playNoteFor(self, block, blocks):
@@ -982,18 +1125,21 @@ class BlockArgMapper:
         return output
 
     def wedo2_whenTilted(self, block, blocks):
-        output = ['LEGO WeDo 2.0\u001fwhenTilted', self.converter.inputVal('TILT_DIRECTION_ANY', block, blocks)]
+        output = ['LEGO WeDo 2.0\u001fwhenTilted',
+                  self.converter.inputVal('TILT_DIRECTION_ANY', block, blocks)]
         return output
 
     def wedo2_getDistance(self, block, blocks):
         return ['LEGO WeDo 2.0\u001fgetDistance']
 
     def wedo2_isTilted(self, block, blocks):
-        output = ['LEGO WeDo 2.0\u001fisTilted', self.converter.inputVal('TILT_DIRECTION_ANY', block, blocks)]
+        output = ['LEGO WeDo 2.0\u001fisTilted', self.converter.inputVal(
+            'TILT_DIRECTION_ANY', block, blocks)]
         return output
 
     def wedo2_getTiltAngle(self, block, blocks):
-        output = ['LEGO WeDo 2.0\u001fgetTilt', self.converter.inputVal('TILT_DIRECTION', block, blocks)]
+        output = ['LEGO WeDo 2.0\u001fgetTilt',
+                  self.converter.inputVal('TILT_DIRECTION', block, blocks)]
         return output
 
 
@@ -1114,7 +1260,7 @@ class ProjectConverter:
             return output
         except Exception as ex:
             if len(block['inputs']) == 0 and len(block['fields']) == 1 and block['shadow'] and not block[
-                'topLevel']:  # Menu opcodes and shadows
+                    'topLevel']:  # Menu opcodes and shadows
                 return self.fieldVal(list(block['fields'].items())[0][0], block)
             elif block['shadow'] and block['topLevel']:
                 # Probably an invisible block
@@ -1209,12 +1355,14 @@ class ProjectConverter:
             output = self.convertBlock(block, blocks)
             sReporters = self.compatStackReporters[-1]
             if len(sReporters) > 0:
-                script.append(['deleteLine:ofList:', 'all', self.compatVarName('results')])
+                script.append(['deleteLine:ofList:', 'all',
+                              self.compatVarName('results')])
                 script.extend(self.compatStackReporters[-1])
                 if output[0] == 'doUntil':
                     if type(output[2]) != list:
                         output[2] = []
-                    output[2].append(['deleteLine:ofList:', 'all', self.compatVarName('results')])
+                    output[2].append(
+                        ['deleteLine:ofList:', 'all', self.compatVarName('results')])
                     output[2].extend(self.compatStackReporters[-1])
             script.append(output)
             if block['next'] is None:
@@ -1290,18 +1438,33 @@ class ProjectConverter:
                     srate = int.from_bytes(wav[24:28], byteorder='little')
 
                 modified = False
-                error = width * channels == 0 or (len(sampData) - 44) % (width * channels) != 0
+                error = width * \
+                    channels == 0 or (
+                        len(sampData) - 44) % (width * channels) != 0
 
                 if not error:
                     try:
                         if channels == 2:  # Convert to mono
-                            sampData = audioop.tomono(sampData, width, 1, 1)
+                            if audioop:
+                                sampData = audioop.tomono(
+                                    sampData, width, 1, 1)
+                            else:
+                                print("Used reimplemented stereo to mono")
+                                sampData = convert_to_mono(sampData, width)
                             modified = True
 
                         if srate > 22050 and srate != 44100 and not error:  # Downsample
-                            sampData = audioop.ratecv(sampData, width, 1, srate, 22050, None)[0]
+                            if audioop:
+                                sampData = audioop.ratecv(
+                                    sampData, width, 1, srate, 22050, None)[0]
+                            else:
+                                print("Used reimplemented resampler")
+                                sampData = resample_audio(
+                                    sampData, width, srate, 22050)
+
                             srate = 22050
                             modified = True
+
                     except Exception as ex:
                         error = True
 
@@ -1323,7 +1486,7 @@ class ProjectConverter:
                         # Original solution which works in most cases
                         wav = wav[0:22] + (1).to_bytes(2, byteorder='little') + srate.to_bytes(4,
                                                                                                byteorder='little') + wav[
-                                                                                                                     28:40] + size.to_bytes(
+                            28:40] + size.to_bytes(
                             4, byteorder='little') + sampData
                     self.soundAssets[s['assetId']].append(False)
                     md5 = hashlib.md5(wav).hexdigest()
@@ -1333,7 +1496,8 @@ class ProjectConverter:
                 else:
                     self.soundAssets[s['assetId']].append(False)
 
-                self.zfsb2.writestr(f'{len(self.soundAssets) - 1}.{s["dataFormat"]}', wav)
+                self.zfsb2.writestr(
+                    f'{len(self.soundAssets) - 1}.{s["dataFormat"]}', wav)
                 f.close()
             else:
                 self.soundAssets[s['assetId']].append(False)
@@ -1343,9 +1507,11 @@ class ProjectConverter:
             self.soundAssets[s['assetId']].append(md5)
 
         if s['dataFormat'] != 'wav':
-            self.generateWarning(f"Sound '{s['name']}' cannot be converted into WAV")
+            self.generateWarning(
+                f"Sound '{s['name']}' cannot be converted into WAV")
         elif self.soundAssets[s['assetId']][1] == True:
-            self.generateWarning(f"Sound '{s['name']}' cannot be converted to mono or downsampled")
+            self.generateWarning(
+                f"Sound '{s['name']}' cannot be converted to mono or downsampled")
 
         fileData = self.soundAssets[s['assetId']]
         sound = {
@@ -1376,10 +1542,12 @@ class ProjectConverter:
                 # Remove incorrect attributes added by Scratch 3.0
                 # The correct values are found in the style attribute
 
-                img = img.replace('fill="undefined"', '')  # Remove undefined fill
+                # Remove undefined fill
+                img = img.replace('fill="undefined"', '')
 
                 # Remove incorrect stroke-width
-                if ';stroke-width:' in img:  # Check if stroke-width is in style attribute (may incorrectly remove some stroke-width attributes)
+                # Check if stroke-width is in style attribute (may incorrectly remove some stroke-width attributes)
+                if ';stroke-width:' in img:
                     left = 0
                     while left != -1:
                         left = img.find('stroke-width="', left)
@@ -1411,9 +1579,10 @@ class ProjectConverter:
                                 image = image[0:yLeft] + image[yRight + 1:]
 
                                 transformLeft = image.find('transform="')
-                                transformRight = image.find('"', transformLeft + 11)
+                                transformRight = image.find(
+                                    '"', transformLeft + 11)
                                 image = image[0:transformRight] + f'translate({trX} {trY})' + image[
-                                                                                              transformRight:]
+                                    transformRight:]
 
                                 img = img[0:left] + image + img[right:]
                             except Exception as ex:
@@ -1441,10 +1610,14 @@ class ProjectConverter:
                             if i != -1:
                                 j = attrs.find('"', i + 4)
                                 attrs = attrs[0:i] + attrs[j + 1:]
-                            attrs = attrs.replace('font-family="Sans Serif"', 'font-family="Helvetica"')
-                            attrs = attrs.replace('font-family="Serif"', 'font-family="Donegal"')
-                            attrs = attrs.replace('font-family="Handwriting"', 'font-family="Gloria"')
-                            attrs = attrs.replace('font-family="Curly"', 'font-family="Mystery"')
+                            attrs = attrs.replace(
+                                'font-family="Sans Serif"', 'font-family="Helvetica"')
+                            attrs = attrs.replace(
+                                'font-family="Serif"', 'font-family="Donegal"')
+                            attrs = attrs.replace(
+                                'font-family="Handwriting"', 'font-family="Gloria"')
+                            attrs = attrs.replace(
+                                'font-family="Curly"', 'font-family="Mystery"')
                             attrs = attrs.replace('xml:space="preserve"', '')
 
                             left = right
@@ -1455,12 +1628,15 @@ class ProjectConverter:
                             content = img[innerLeft:right - 7]
                             if 'tspan' in content:
                                 while innerLeft != -1:
-                                    innerLeft = img.find('<tspan', innerLeft, right)
+                                    innerLeft = img.find(
+                                        '<tspan', innerLeft, right)
                                     if innerLeft != -1:
                                         lineCount += 1
                                         innerLeft += 6
-                                        innerLeft = img.find('>', innerLeft, right) + 1
-                                        innerRight = img.find('</tspan>', innerLeft, right)
+                                        innerLeft = img.find(
+                                            '>', innerLeft, right) + 1
+                                        innerRight = img.find(
+                                            '</tspan>', innerLeft, right)
                                         text += img[innerLeft:innerRight] + '\n'
                                         innerLeft = innerRight + 7
 
@@ -1481,13 +1657,16 @@ class ProjectConverter:
                                     scX = matrix[0][7:]
                                     if scX[-1] == ',':
                                         scX = scX[0:-1]
-                                    matrix[-2] = str(float(x) - 2.5 * float(scX))
+                                    matrix[-2] = str(float(x) -
+                                                     2.5 * float(scX))
                                     scY = matrix[3]
                                     if scY[-1] == ',':
                                         scY = scY[0:-1]
-                                    matrix[-1] = str(float(matrix[-1][0:-1]) + 2.5 * float(scY)) + ')'
+                                    matrix[-1] = str(float(matrix[-1]
+                                                     [0:-1]) + 2.5 * float(scY)) + ')'
                                     matrix = ' '.join(matrix)
-                                    attrs = attrs[0:matLeft] + matrix + attrs[matRight:]
+                                    attrs = attrs[0:matLeft] + \
+                                        matrix + attrs[matRight:]
                                 except Exception as ex:
                                     self.generateWarning(
                                         f"Costume '{c['name']}' may have incorrect text positioning")
@@ -1529,8 +1708,10 @@ class ProjectConverter:
                                             trY -= 40 * scY
                                         else:
                                             trY -= 25 * scY
-                                        matrix = f'matrix({scX} 0 0 {scY} {trX} {trY})'
-                                        attrs = attrs[0:trLeft] + matrix + attrs[scRight:]
+                                        matrix = f'matrix({scX} 0 0 {scY} {
+                                            trX} {trY})'
+                                        attrs = attrs[0:trLeft] + \
+                                            matrix + attrs[scRight:]
                                     except Exception as ex:
                                         self.generateWarning(
                                             f"Costume '{c['name']}' may have incorrect text positioning")
@@ -1546,7 +1727,8 @@ class ProjectConverter:
                 md5ext = hashlib.md5(img.encode('utf-8')).hexdigest() + '.svg'
             else:
                 img = bytes(img)
-            self.zfsb2.writestr(f'{len(self.costumeAssets) - 1}.{c["dataFormat"]}', img)
+            self.zfsb2.writestr(
+                f'{len(self.costumeAssets) - 1}.{c["dataFormat"]}', img)
             f.close()
 
             self.costumeAssets[c['assetId']].append(md5ext)
@@ -1890,7 +2072,8 @@ class ProjectConverter:
                          ["stringLength:", ["getParam", "STRING2", "r"]]],
                         10240],
                        [["doIf",
-                         ["not", ["=", ["contentsOfList:", joinList], ["getParam", "STRING1", "r"]]],
+                         ["not", ["=", ["contentsOfList:", joinList],
+                                  ["getParam", "STRING1", "r"]]],
                          [["deleteLine:ofList:", "all", joinList],
                           ["setVar:to:", "i", "0"],
                           ["doRepeat",
@@ -1906,7 +2089,8 @@ class ProjectConverter:
                            joinList]]],
                         ["append:toList:", ["contentsOfList:", joinList], "results"]],
                        [["append:toList:",
-                         ["concatenate:with:", ["getParam", "STRING1", "r"], ["getParam", "STRING2", "r"]],
+                         ["concatenate:with:", ["getParam", "STRING1", "r"],
+                             ["getParam", "STRING2", "r"]],
                          "results"]]]]]
                 )
                 self.scriptCount += 1
@@ -1938,7 +2122,8 @@ class ProjectConverter:
                            ["stringLength:", ["getParam", "STRING1", "r"]],
                            [["doIf",
                              ["=",
-                              ["letter:of:", ["readVariable", i], ["getParam", "STRING1", "r"]],
+                              ["letter:of:", ["readVariable", i],
+                                  ["getParam", "STRING1", "r"]],
                               ["getParam", "STRING2", "r"]],
                              [["append:toList:", ["=", 0, 0], results], ["stopScripts", "this script"]]],
                             ["changeVar:by:", i, 1]]],
@@ -1977,14 +2162,16 @@ class ProjectConverter:
                      [["procDef", "item # of %s in %m.list", ["ITEM", "LIST"], ["thing", ""], True],
                       ["setVar:to:", returnVar, 0],
                       ["doIf",
-                       ["list:contains:", ["getParam", "LIST", "r"], ["getParam", "ITEM", "r"]],
+                       ["list:contains:", ["getParam", "LIST", "r"],
+                           ["getParam", "ITEM", "r"]],
                        [["setVar:to:", returnVar, 0],
                         ["doRepeat",
                          ["lineCountOfList:", ["getParam", "LIST", "r"]],
                          [["changeVar:by:", returnVar, 1],
                           ["doIf",
                            ["=",
-                            ["getLine:ofList:", ["readVariable", returnVar], ["getParam", "LIST", "r"]],
+                            ["getLine:ofList:", ["readVariable", returnVar],
+                                ["getParam", "LIST", "r"]],
                             ["getParam", "ITEM", "r"]],
                            [["append:toList:", ["readVariable", returnVar], results],
                             ["stopScripts", "this script"]]]]]]],
@@ -2099,7 +2286,8 @@ class ProjectConverter:
                       0,
                       [["procDef", "set pen color to %c", ["COLOR"], [255], True],
                        ["doIfElse",
-                        ["=", ["*", 1, ["getParam", "COLOR", "r"]], ["getParam", "COLOR", "r"]],
+                        ["=", ["*", 1, ["getParam", "COLOR", "r"]],
+                            ["getParam", "COLOR", "r"]],
                         [["penColor:", ["getParam", "COLOR", "r"]],
                          ["setVar:to:",
                           alpha,
@@ -2112,10 +2300,12 @@ class ProjectConverter:
                          ["call",
                           "store RGB as HSV %n %n %n",
                           ["/",
-                           ["%", ["computeFunction:of:", "floor", ["/", ["getParam", "COLOR", "r"], 65536]], 256],
+                           ["%", ["computeFunction:of:", "floor", [
+                               "/", ["getParam", "COLOR", "r"], 65536]], 256],
                            255],
                           ["/",
-                           ["%", ["computeFunction:of:", "floor", ["/", ["getParam", "COLOR", "r"], 256]], 256],
+                           ["%", ["computeFunction:of:", "floor", [
+                               "/", ["getParam", "COLOR", "r"], 256]], 256],
                            255],
                           ["/", ["%", ["getParam", "COLOR", "r"], 256], 255]]],
                         [["doIfElse",
@@ -2205,31 +2395,37 @@ class ProjectConverter:
                          ["-",
                           ["getParam", "SHADE", "r"],
                           ["*", 200, ["rounded", ["/", ["getParam", "SHADE", "r"], 200]]]]]],
-                       ["call", "HSV to RGB %n %n %n", ["readVariable", hue], 100, 100],
+                       ["call", "HSV to RGB %n %n %n", [
+                           "readVariable", hue], 100, 100],
                        ["doIfElse",
                         ["<", ["readVariable", shade], 50],
                         [["setVar:to:", x, ["/", ["+", ["readVariable", shade], 10], 60]],
-                         ["setVar:to:", r, ["rounded", ["*", ["readVariable", x], ["readVariable", r]]]],
-                         ["setVar:to:", g, ["rounded", ["*", ["readVariable", x], ["readVariable", g]]]],
+                         ["setVar:to:", r, ["rounded", [
+                             "*", ["readVariable", x], ["readVariable", r]]]],
+                         ["setVar:to:", g, ["rounded", [
+                             "*", ["readVariable", x], ["readVariable", g]]]],
                          ["setVar:to:", b, ["rounded", ["*", ["readVariable", x], ["readVariable", b]]]]],
                         [["setVar:to:", x, ["/", ["-", ["readVariable", shade], 50], 60]],
                          ["setVar:to:",
                           r,
                           ["rounded",
                            ["+",
-                            ["*", ["-", 1, ["readVariable", x]], ["readVariable", r]],
+                            ["*", ["-", 1, ["readVariable", x]],
+                                ["readVariable", r]],
                             ["*", ["readVariable", x], 255]]]],
                          ["setVar:to:",
                           g,
                           ["rounded",
                            ["+",
-                            ["*", ["-", 1, ["readVariable", x]], ["readVariable", g]],
+                            ["*", ["-", 1, ["readVariable", x]],
+                                ["readVariable", g]],
                             ["*", ["readVariable", x], 255]]]],
                          ["setVar:to:",
                           b,
                           ["rounded",
                            ["+",
-                            ["*", ["-", 1, ["readVariable", x]], ["readVariable", b]],
+                            ["*", ["-", 1, ["readVariable", x]],
+                                ["readVariable", b]],
                             ["*", ["readVariable", x], 255]]]]]],
                        ["call",
                         "store RGB as HSV %n %n %n",
@@ -2327,7 +2523,8 @@ class ProjectConverter:
                             ["<", ["getParam", "G", "r"], ["getParam", "B", "r"]]]],
                           [["setVar:to:", maxVar, ["getParam", "G", "r"]]],
                           [["setVar:to:", maxVar, ["getParam", "B", "r"]]]]]],
-                       ["setVar:to:", diff, ["-", ["readVariable", maxVar], ["readVariable", minVar]]],
+                       ["setVar:to:", diff, [
+                           "-", ["readVariable", maxVar], ["readVariable", minVar]]],
                        ["doIfElse",
                         ["=", ["readVariable", diff], 0],
                         [["setVar:to:", hue, 0], ["setVar:to:", sat, 0]],
@@ -2338,18 +2535,21 @@ class ProjectConverter:
                             ["/",
                              ["%",
                               ["/",
-                               ["-", ["getParam", "G", "r"], ["getParam", "B", "r"]],
+                               ["-", ["getParam", "G", "r"],
+                                   ["getParam", "B", "r"]],
                                ["readVariable", diff]],
                               6],
                              0.06]]],
                           [["doIfElse",
-                            ["=", ["readVariable", maxVar], ["getParam", "G", "r"]],
+                            ["=", ["readVariable", maxVar],
+                                ["getParam", "G", "r"]],
                             [["setVar:to:",
                               hue,
                               ["/",
                                ["+",
                                 ["/",
-                                 ["-", ["getParam", "B", "r"], ["getParam", "R", "r"]],
+                                 ["-", ["getParam", "B", "r"],
+                                     ["getParam", "R", "r"]],
                                  ["readVariable", diff]],
                                 2],
                                0.06]]],
@@ -2358,7 +2558,8 @@ class ProjectConverter:
                               ["/",
                                ["+",
                                 ["/",
-                                 ["-", ["getParam", "R", "r"], ["getParam", "G", "r"]],
+                                 ["-", ["getParam", "R", "r"],
+                                     ["getParam", "G", "r"]],
                                  ["readVariable", diff]],
                                 4],
                                0.06]]]]]],
@@ -2466,7 +2667,8 @@ class ProjectConverter:
             sprite['layerOrder'] = target['layerOrder']
 
         print("Converted {} ({}/{})".format(
-            rightPad(f"'{sprite['objName']}'", maxLen - len(sprite['objName']), ' '), index + 1,
+            rightPad(f"'{sprite['objName']}'", maxLen -
+                     len(sprite['objName']), ' '), index + 1,
             self.totalTargets))
 
         return (isStage, sprite)
@@ -2567,7 +2769,8 @@ class ProjectConverter:
                 self.monitors.append(monitor)
 
             except Exception as ex:
-                self.generateWarning(f"Stage monitor '{m['opcode']}' will not be converted")
+                self.generateWarning(
+                    f"Stage monitor '{m['opcode']}' will not be converted")
 
     def convertProject(self, sb3path, sb2path, gui=False, replace=False, compatibility=False, unlimitedJoin=False,
                        limitedLists=False, penFillScreen=False):
@@ -2605,7 +2808,8 @@ class ProjectConverter:
             else:
                 if gui:
                     goAhead = messagebox.askquestion('Overwrite SB2',
-                                                     f"File {sb2path} already exists.\n\nOverwrite {sb2path}?",
+                                                     f"File {sb2path} already exists.\n\nOverwrite {
+                                                         sb2path}?",
                                                      icon='warning'
                                                      )
                     replaceFile = (goAhead == 'yes')
@@ -2666,7 +2870,8 @@ class ProjectConverter:
                             [["whenGreenFlag"],
                              ["doIf",
                               [">",
-                               ["-", ["*", 86400, ["-", ["timestamp"], ["readVariable", "reset time"]]], ["timer"]],
+                               ["-", ["*", 86400, ["-", ["timestamp"],
+                                                   ["readVariable", "reset time"]]], ["timer"]],
                                "0.1"],
                               [["setVar:to:", "reset time", ["-", ["timestamp"], ["/", ["timer"], 86400]]]]]]]
             output['scripts'].append(gfResetTimer)
@@ -2704,7 +2909,8 @@ class ProjectConverter:
         # Add WeDo 2.0 extension if necessary
 
         if 'wedo2' in self.jsonData['extensions']:
-            output['info']['savedExtensions'] = [{'extensionName': 'LEGO WeDo 2.0'}]
+            output['info']['savedExtensions'] = [
+                {'extensionName': 'LEGO WeDo 2.0'}]
 
         output = json.dumps(output)
 
@@ -2723,7 +2929,8 @@ def success(sb2path, warnings, gui):
         elif warnings == 1:
             messagebox.showinfo("Success", f"Completed with 1 warning")
         else:
-            messagebox.showinfo("Success", f"Completed with {warnings} warnings")
+            messagebox.showinfo("Success", f"Completed with {
+                                warnings} warnings")
     else:
         print('')
         if warnings == 0:
@@ -2758,7 +2965,8 @@ if __name__ == '__main__':
 
         root = tkinter.Tk()
         root.withdraw()
-        sb3path = filedialog.askopenfilename(title="Open SB3 Project", filetypes=[("Scratch 3 Project", "*.sb3")])
+        sb3path = filedialog.askopenfilename(title="Open SB3 Project", filetypes=[
+                                             ("Scratch 3 Project", "*.sb3")])
         i = sb3path.rfind('.')
         if i > -1:
             sb2path = f'{sb3path[0:i]}.sb2'
@@ -2805,8 +3013,10 @@ if __name__ == '__main__':
             retry = (retry == 'yes')
         else:
             print('')
-            printWarning("The converted project may not work properly unless compatibility mode is enabled.")
-            retry = input(f"Would you like to re-convert '{sb3path}' with compatibility mode enabled? (Y/N): ")
+            printWarning(
+                "The converted project may not work properly unless compatibility mode is enabled.")
+            retry = input(
+                f"Would you like to re-convert '{sb3path}' with compatibility mode enabled? (Y/N): ")
             retry = (retry[0] == 'Y' or retry[0] == 'y')
 
         if retry:
