@@ -5,7 +5,10 @@ This is fork that makes it work on Python 3.13 onwards by reimplementing some fu
 
 Requirements
 --------------
-- Python 3 (preferably 3.6.2 or later)
+- Python 3 (preferably 3.6 or later)
+- Tkinter:\
+For Windows users: Make sure the Tcl/Tk option is checked during the installation of Python\
+For Linux users: Install package `python3-tk` using your distribution's package manager.
 
 Installation
 --------------
